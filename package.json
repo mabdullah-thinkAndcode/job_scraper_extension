@@ -1,0 +1,8 @@
+{
+  "name": "job-scraper-extension",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build-injected-bundle.mjs"
+  }
+}
