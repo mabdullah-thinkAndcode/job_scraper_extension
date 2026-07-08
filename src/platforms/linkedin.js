@@ -1,6 +1,6 @@
 // Adapter: LinkedIn
 // Confidence: High - verified against 2026 selector reports.
-// URL pattern: linkedin.com/jobs/view/*
+// URL pattern: linkedin.com/jobs/view/* and linkedin.com/jobs/search/*?currentJobId=*
 //
 // Selector notes (from selector-inventory/linkedin.md):
 //   Title:        .job-details-jobs-unified-top-card__job-title, h1
@@ -12,7 +12,8 @@
 // NOTE: Requires login for most job detail pages. Content loads async (SPA) - wait for hydration. Class names change periodically, verify before each large batch run.
 
 export function canHandle(url, document) {
-  return /linkedin\.com\/jobs\/view\//i.test(url);
+  return /linkedin\.com\/jobs\/view\//i.test(url)
+    || (/linkedin\.com\/jobs\/search\//i.test(url) && /[?&]currentJobId=/i.test(url));
 }
 
 function firstMatch(document, selectorList) {
