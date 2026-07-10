@@ -1,15 +1,26 @@
 # Platform: Remote Hunter
 
-- Confidence: Unverified.
-- URL pattern: `TODO - confirm domain/URL pattern`
-- Title selector(s): `TODO`
-- Company selector(s): `TODO`
-- Company link selector(s): `TODO`
-- JD selector(s): `TODO`
-- Expand/"show more" button: `TODO`
+- Confidence: Medium - based on `Extracted DOMs/remotehunter.md` structured report.
+- URL pattern: `remotehunter.com/jobs*`
+- Results list selector(s): `.job-search-results`
+- Job card selector(s): `.rh-list-stack__layers`
+- Click target selector(s): `.rh-list-stack__layers a, a[href*='/apply-with-ai/']`
+- Detail pane selector(s): `.job-detail-scrollable-content`
+- Title selector(s): `.job-detail-scrollable-content h1`
+- Company selector(s): `.job-header-box .company-name`
+- Company link selector(s): `closest(a)` from the company element when present
+- JD selector(s): `.job-description`
+- Expand/"show more" button: `not required in current report`
 
 ## Notes
-No public documentation found. Confirm exact site (name is generic and may collide with other 'remote hunter' branded sites).
+Use the AI selector report as the primary source of truth for batch traversal on this platform. Avoid `jsx-*` hashed classes. The split view appears to update in place, so wait for detail-pane `h1` text or UUID-bearing href changes after clicking a card.
+
+## Extracted DOM evidence
+- Source: `Extracted DOMs/remotehunter.md`
+- Primary scroll mode: `window` infinite scroll
+- Dedupe key: UUID in `/apply-with-ai/` href
+- Detail change detection: `.job-detail-scrollable-content h1`
+- Avoid selectors: `.jsx-*` hashed classes
 
 ## Verification checklist (fill in Codex session)
 - [ ] Open a real job detail page for this platform

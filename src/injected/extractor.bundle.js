@@ -4,42 +4,430 @@ const linkedin = (() => {
 // Confidence: High - verified against 2026 selector reports.
 // URL pattern: linkedin.com/jobs/view/* and linkedin.com/jobs/search/*?currentJobId=*
 //
-// Selector notes (from selector-inventory/linkedin.md):
-//   Title:        .job-details-jobs-unified-top-card__job-title, h1
-//   Company:      .job-details-jobs-unified-top-card__company-name a, .job-details-jobs-unified-top-card__company-name, .topcard__org-name-link
-//   Company link: .job-details-jobs-unified-top-card__company-name a, .topcard__org-name-link
-//   JD:           .jobs-description__content, .jobs-box__html-content, .show-more-less-html__markup
-//   Expand button:button[aria-label*="Click to see more"], .show-more-less-html__button
+// Selector notes (from selector-inventory/linkedin.md and Extracted DOMs/linkedin.md):
+//   Results list: [role='main'] [role='list'], .jobs-search-results-list, .scaffold-layout__list
+//   Job card:      [role='listitem'][componentkey], [role='listitem']
+//   Click target:  a[href*='currentJobId='], a[href*='/jobs/view/']
+//   Detail pane:   .jobs-search__job-details--container, .scaffold-layout__detail, [role='main']
+//   Title:         .job-details-jobs-unified-top-card__job-title, h1
+//   Company:       .job-details-jobs-unified-top-card__company-name a, .topcard__org-name-link
+//   JD:            .jobs-description__content, .jobs-box__html-content, .show-more-less-html__markup
 //
-// NOTE: Requires login for most job detail pages. Content loads async (SPA) - wait for hydration. Class names change periodically, verify before each large batch run.
+// NOTE: Requires login for most job detail pages. Content loads async (SPA) - wait for hydration.
+
+const RESULTS_LIST_SELECTORS = [
+  "[role='main'] .jobs-search-results-list",
+  "[role='main'] [role='list']",
+  ".scaffold-layout__list [role='list']",
+  ".jobs-search-results-list",
+  ".jobs-search__results-list",
+  "[role='list']"
+];
+
+const JOB_CARD_SELECTORS = [
+  "[role='listitem'][componentkey]",
+  "[role='listitem']"
+];
+
+const CARD_CLICK_TARGET_SELECTORS = [
+  "a[href*='currentJobId=']",
+  "a[href*='/jobs/view/']"
+];
+
+const DETAIL_PANE_SELECTORS = [
+  ".jobs-search__job-details--container",
+  ".jobs-details__main-content",
+  ".job-view-layout",
+  ".scaffold-layout__detail",
+  "[data-job-detail-container]",
+  ".jobs-unified-top-card",
+  "[role='main']"
+];
+
+const TITLE_SELECTORS = [
+  ".job-details-jobs-unified-top-card__job-title",
+  ".jobs-unified-top-card__job-title",
+  ".t-24.job-details-jobs-unified-top-card__job-title",
+  "h1"
+];
+
+const COMPANY_SELECTORS = [
+  ".job-details-jobs-unified-top-card__company-name a",
+  ".job-details-jobs-unified-top-card__company-name",
+  ".jobs-unified-top-card__company-name a",
+  ".jobs-unified-top-card__company-name",
+  ".topcard__org-name-link",
+  "a[href*='/company/']"
+];
+
+const JD_SELECTORS = [
+  ".jobs-description__content",
+  ".jobs-box__html-content",
+  ".show-more-less-html__markup",
+  "[data-job-detail-description]",
+  ".jobs-description",
+  "article"
+];
+
+const EXPAND_BUTTON_SELECTORS = [
+  "button[aria-label*='Click to see more']",
+  "button[aria-label*='show more' i]",
+  "button[aria-expanded='false'][aria-label*='description' i]",
+  "button[aria-label*='Continue reading' i]",
+  ".show-more-less-html__button"
+];
 
 function canHandle(url, document) {
   return /linkedin\.com\/jobs\/view\//i.test(url)
     || (/linkedin\.com\/jobs\/search\//i.test(url) && /[?&]currentJobId=/i.test(url));
 }
 
-function firstMatch(document, selectorList) {
-  for (const sel of selectorList) {
+function firstMatch(root, selectorList) {
+  for (const selector of selectorList) {
     try {
-      const el = document.querySelector(sel);
+      const el = root.querySelector(selector);
       if (el && el.textContent.trim()) return el;
-    } catch (e) { /* invalid selector, skip */ }
+    } catch (error) {
+      // Ignore invalid selectors.
+    }
   }
+
   return null;
 }
 
-function extract(document, url) {
-  const titleEl = firstMatch(document, [".job-details-jobs-unified-top-card__job-title", "h1"]);
-  const companyEl = firstMatch(document, [".job-details-jobs-unified-top-card__company-name a", ".job-details-jobs-unified-top-card__company-name", ".topcard__org-name-link"]);
-  const jdEl = firstMatch(document, [".jobs-description__content", ".jobs-box__html-content", ".show-more-less-html__markup"]);
+function firstExisting(root, selectorList) {
+  for (const selector of selectorList) {
+    try {
+      const el = root.querySelector(selector);
+      if (el) return el;
+    } catch (error) {
+      // Ignore invalid selectors.
+    }
+  }
+
+  return null;
+}
+
+function textOrEmpty(el) {
+  return el ? el.textContent.trim() : "";
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isLinkedInSearchPage(url) {
+  return /linkedin\.com\/jobs\/search\//i.test(url) && /[?&]currentJobId=/i.test(url);
+}
+
+function queryAllUnique(root, selectors) {
+  const nodes = [];
+  const seen = new Set();
+
+  selectors.forEach((selector) => {
+    try {
+      root.querySelectorAll(selector).forEach((node) => {
+        if (!node || seen.has(node)) return;
+        seen.add(node);
+        nodes.push(node);
+      });
+    } catch (error) {
+      // Ignore invalid selectors.
+    }
+  });
+
+  return nodes;
+}
+
+function getDetailPane(document) {
+  return firstExisting(document, DETAIL_PANE_SELECTORS);
+}
+
+function hasMeaningfulJobPane(document) {
+  const detailPane = getDetailPane(document);
+  if (!detailPane) return false;
+
+  return Boolean(firstMatch(detailPane, [
+    ...TITLE_SELECTORS,
+    ...JD_SELECTORS
+  ]));
+}
+
+async function waitForLinkedInJobPane(document, attempts = 5, delayMs = 600) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (hasMeaningfulJobPane(document)) {
+      return { ready: true, reason: "job-detail-pane-found", attempts: attempt + 1 };
+    }
+
+    await wait(delayMs);
+  }
+
+  return { ready: false, reason: "job-detail-pane-not-ready", attempts };
+}
+
+function getScopedMatch(root, selectors) {
+  return root ? firstMatch(root, selectors) : null;
+}
+
+function maybeExpandDescription(document) {
+  const expandButton = firstExisting(document, EXPAND_BUTTON_SELECTORS);
+  if (!expandButton) return false;
+
+  try {
+    expandButton.click();
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function getCardClickTarget(card) {
+  return firstExisting(card, CARD_CLICK_TARGET_SELECTORS) || (card.matches?.("a[href]") ? card : null);
+}
+
+function getJobIdFromUrl(value) {
+  if (!value) return "";
+
+  try {
+    const parsed = new URL(value, window.location.origin);
+    return parsed.searchParams.get("currentJobId")
+      || (parsed.pathname.match(/\/jobs\/view\/(\d+)/i)?.[1] || "");
+  } catch (error) {
+    return "";
+  }
+}
+
+function cardLooksLikeJob(card) {
+  const clickTarget = getCardClickTarget(card);
+  if (!clickTarget) return false;
+
+  const text = card.textContent || "";
+  return Boolean(
+    getJobIdFromUrl(clickTarget.href)
+    || /easy apply|posted|applicants|reposted/i.test(text)
+  );
+}
+
+function scoreResultsContainer(container) {
+  const cards = queryAllUnique(container, JOB_CARD_SELECTORS);
+  const jobCards = cards.filter((card) => cardLooksLikeJob(card));
+  const clickTargets = queryAllUnique(container, CARD_CLICK_TARGET_SELECTORS);
+  return {
+    container,
+    score: (jobCards.length * 10) + clickTargets.length,
+    totalCards: cards.length,
+    jobCardCount: jobCards.length,
+    clickTargetCount: clickTargets.length
+  };
+}
+
+function getResultsContainerCandidates(document) {
+  return queryAllUnique(document, RESULTS_LIST_SELECTORS).map(scoreResultsContainer);
+}
+
+function getResultsContainer(document) {
+  const candidates = getResultsContainerCandidates(document)
+    .filter((candidate) => candidate.jobCardCount > 0 || candidate.clickTargetCount > 0)
+    .sort((a, b) => b.score - a.score);
+
+  return candidates[0]?.container || null;
+}
+
+function queryJobCards(root) {
+  const seen = new Set();
+  const cards = [];
+
+  for (const selector of JOB_CARD_SELECTORS) {
+    try {
+      const matches = root.querySelectorAll(selector);
+      matches.forEach((card) => {
+        if (!card || seen.has(card)) return;
+        if (!cardLooksLikeJob(card)) return;
+        seen.add(card);
+        cards.push(card);
+      });
+    } catch (error) {
+      // Ignore invalid selectors.
+    }
+  }
+
+  return cards;
+}
+
+function getJobCards(document) {
+  const resultsContainer = getResultsContainer(document);
+  if (!resultsContainer) return [];
+  return queryJobCards(resultsContainer);
+}
+
+function getCardKey(card) {
+  const clickTarget = getCardClickTarget(card);
+  const href = clickTarget?.href || "";
+  const jobId = getJobIdFromUrl(href);
+  return jobId || href || card.getAttribute("componentkey") || card.getAttribute("aria-label") || "";
+}
+
+function buildCanonicalJobUrl(jobId, href = "") {
+  if (href) {
+    try {
+      const parsed = new URL(href, window.location.origin);
+      if (/\/jobs\/view\//i.test(parsed.pathname)) {
+        return `${parsed.origin}${parsed.pathname}`;
+      }
+    } catch (error) {
+      // Fall through to the canonical path.
+    }
+  }
+
+  return jobId ? `https://www.linkedin.com/jobs/view/${jobId}/` : "";
+}
+
+function getSelectedJobLinkFromCard(document) {
+  const selectedCard = firstExisting(document, [
+    "[role='listitem'][aria-current='true']",
+    "[role='listitem'][aria-selected='true']",
+    ".jobs-search-results__list-item--active",
+    ".jobs-search-results__list-item.active"
+  ]);
+  const clickTarget = selectedCard ? getCardClickTarget(selectedCard) : null;
+  const jobId = getJobIdFromUrl(clickTarget?.href || window.location.href);
+  return buildCanonicalJobUrl(jobId, clickTarget?.href || "");
+}
+
+function getSelectedJobLinkFromDetailPane(document) {
+  const detailPane = getDetailPane(document) || document;
+  const detailAnchor = firstExisting(detailPane, [
+    "a[href*='/jobs/view/']",
+    "a[href*='currentJobId=']"
+  ]);
+  const href = detailAnchor?.href || "";
+  const jobId = getJobIdFromUrl(href || window.location.href);
+  return buildCanonicalJobUrl(jobId, href);
+}
+
+function getActualJobLink(document) {
+  const fromDetailPane = getSelectedJobLinkFromDetailPane(document);
+  if (fromDetailPane) return fromDetailPane;
+
+  const fromCard = getSelectedJobLinkFromCard(document);
+  if (fromCard) return fromCard;
+
+  const jobId = getJobIdFromUrl(window.location.href);
+  return buildCanonicalJobUrl(jobId) || window.location.href;
+}
+
+function getCurrentDetailState(document) {
+  const detailPane = getDetailPane(document);
+  const title = textOrEmpty(getScopedMatch(detailPane || document, TITLE_SELECTORS));
+  const siteLink = getActualJobLink(document);
+  return {
+    jobId: getJobIdFromUrl(siteLink || window.location.href),
+    title,
+    siteLink
+  };
+}
+
+function openJobCard(card) {
+  const clickTarget = getCardClickTarget(card);
+  if (!clickTarget) {
+    throw new Error("LinkedIn card click target not found.");
+  }
+
+  card.scrollIntoView({ block: "center", inline: "nearest" });
+  clickTarget.click();
+}
+
+async function waitForJobDetailsChange(previousState, document, options = {}) {
+  const timeoutMs = options.timeoutMs || 12000;
+  const pollMs = options.pollMs || 350;
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    if (hasMeaningfulJobPane(document)) {
+      const currentState = getCurrentDetailState(document);
+      if (
+        (currentState.jobId && currentState.jobId !== previousState?.jobId)
+        || (!currentState.jobId && currentState.title && currentState.title !== previousState?.title)
+      ) {
+        return {
+          changed: true,
+          state: currentState,
+          reason: currentState.jobId ? "job-id-changed" : "title-changed"
+        };
+      }
+    }
+
+    await wait(pollMs);
+  }
+
+  return {
+    changed: false,
+    state: getCurrentDetailState(document),
+    reason: "timeout"
+  };
+}
+
+function getScrollContainer(document) {
+  // The selector report explicitly called out window-level scrolling for this page type.
+  return window;
+}
+
+function hasReachedEnd(document) {
+  const scrollBottom = window.scrollY + window.innerHeight;
+  const docHeight = Math.max(
+    document.body?.scrollHeight || 0,
+    document.documentElement?.scrollHeight || 0
+  );
+  return scrollBottom >= docHeight - 24;
+}
+
+function getBatchDebugInfo(document) {
+  const candidates = getResultsContainerCandidates(document);
+  const chosen = getResultsContainer(document);
+  const jobCards = chosen ? queryJobCards(chosen) : [];
+
+  return {
+    resultsContainerFound: Boolean(chosen),
+    resultsContainerMatchCount: candidates.length,
+    chosenContainerScore: candidates.find((candidate) => candidate.container === chosen)?.score || 0,
+    candidateSummaries: candidates.slice(0, 5).map((candidate) => ({
+      score: candidate.score,
+      totalCards: candidate.totalCards,
+      jobCardCount: candidate.jobCardCount,
+      clickTargetCount: candidate.clickTargetCount
+    })),
+    cardCount: jobCards.length,
+    sampleKeys: jobCards.slice(0, 5).map((card) => getCardKey(card))
+  };
+}
+
+async function extract(document, url) {
+  maybeExpandDescription(document);
+
+  const waitState = isLinkedInSearchPage(url)
+    ? await waitForLinkedInJobPane(document)
+    : { ready: true, reason: "direct-view-page", attempts: 0 };
+
+  const detailPane = getDetailPane(document) || document;
+  const titleEl = getScopedMatch(detailPane, TITLE_SELECTORS);
+  const companyEl = getScopedMatch(detailPane, COMPANY_SELECTORS);
+  const jdEl = getScopedMatch(detailPane, JD_SELECTORS);
 
   return {
     platform: "LinkedIn",
-    siteLink: url,
-    company: companyEl ? companyEl.textContent.trim() : "",
-    jobTitle: titleEl ? titleEl.textContent.trim() : "",
+    siteLink: getActualJobLink(document),
+    company: textOrEmpty(companyEl),
+    jobTitle: textOrEmpty(titleEl),
     companyLink: companyEl && companyEl.tagName === "A" ? companyEl.href : (companyEl?.querySelector("a")?.href || ""),
-    jd: jdEl ? jdEl.innerText.trim() : ""
+    jd: jdEl ? jdEl.innerText.trim() : "",
+    _debug: {
+      waitState,
+      detailPaneFound: Boolean(getDetailPane(document)),
+      titleFound: Boolean(titleEl),
+      companyFound: Boolean(companyEl),
+      jdFound: Boolean(jdEl),
+      batch: getBatchDebugInfo(document)
+    }
   };
 }
 
@@ -47,10 +435,16 @@ function getDebugInfo(document) {
   return {
     adapter: "linkedin",
     confidence: "High - verified against 2026 selector reports.",
-    todo: false
+    allowGenericFallback: false,
+    supportsBatch: true,
+    todo: false,
+    selectors: {
+      detailPaneFound: Boolean(getDetailPane(document)),
+      ...getBatchDebugInfo(document)
+    }
   };
 }
-return { canHandle, extract, getDebugInfo };
+return { waitForJobDetailsChange, extract, canHandle, maybeExpandDescription, getResultsContainer, getJobCards, getCardKey, getCurrentDetailState, openJobCard, getScrollContainer, hasReachedEnd, getBatchDebugInfo, getDebugInfo };
 })();
 
 const indeed = (() => {
@@ -1024,56 +1418,244 @@ return { canHandle, extract, getDebugInfo };
 
 const remotehunter = (() => {
 // Adapter: Remote Hunter
-// Confidence: Unverified.
-// URL pattern: TODO - confirm domain/URL pattern
+// Confidence: Medium - based on 2026 AI selector report in Extracted DOMs/remotehunter.md.
+// URL pattern: remotehunter.com/jobs*
 //
-// Selector notes (from selector-inventory/remotehunter.md):
-//   Title:        TODO
-//   Company:      TODO
-//   Company link: TODO
-//   JD:           TODO
-//   Expand button:TODO
+// Selector notes (from Extracted DOMs/remotehunter.md):
+//   Results list: .job-search-results
+//   Job card:      .rh-list-stack__layers
+//   Click target:  .rh-list-stack__layers a
+//   Detail pane:   .job-detail-scrollable-content
+//   Title:         .job-detail-scrollable-content h1
+//   Company:       .job-header-box .company-name
+//   JD:            .job-description
+//   Dedupe:        UUID in href
 //
-// NOTE: No public documentation found. Confirm exact site (name is generic and may collide with other 'remote hunter' branded sites).
+// NOTE: Avoid jsx-* hashed classes. Next.js split-view page with window-level infinite scroll.
+
+const RESULTS_CONTAINER_SELECTORS = [".job-search-results"];
+const JOB_CARD_SELECTORS = [".rh-list-stack__layers"];
+const CLICK_TARGET_SELECTORS = ["a[href*='/apply-with-ai/']", "a[href]"];
+const DETAIL_PANE_SELECTORS = [".job-detail-scrollable-content"];
+const TITLE_SELECTORS = [".job-detail-scrollable-content h1", "h1"];
+const COMPANY_SELECTORS = [".job-header-box .company-name", ".company-name"];
+const JD_SELECTORS = [".job-description"];
 
 function canHandle(url, document) {
-  // TODO: refine URL match if this is too broad/narrow.
-  return /remotehunter/i.test(url);
+  return /remotehunter\.com\/jobs/i.test(url);
 }
 
-function firstMatch(document, selectorList) {
-  for (const sel of selectorList) {
+function firstMatch(root, selectorList) {
+  for (const selector of selectorList) {
     try {
-      const el = document.querySelector(sel);
+      const el = root.querySelector(selector);
       if (el && el.textContent.trim()) return el;
-    } catch (e) { /* invalid selector, skip */ }
+    } catch (error) {
+      // Ignore invalid selectors.
+    }
   }
   return null;
 }
 
+function firstExisting(root, selectorList) {
+  for (const selector of selectorList) {
+    try {
+      const el = root.querySelector(selector);
+      if (el) return el;
+    } catch (error) {
+      // Ignore invalid selectors.
+    }
+  }
+  return null;
+}
+
+function textOrEmpty(el) {
+  return el ? el.textContent.trim() : "";
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getDetailPane(document) {
+  return firstExisting(document, DETAIL_PANE_SELECTORS);
+}
+
+function getResultsContainer(document) {
+  return firstExisting(document, RESULTS_CONTAINER_SELECTORS);
+}
+
+function getClickTarget(card) {
+  return firstExisting(card, CLICK_TARGET_SELECTORS) || (card.matches?.("a[href]") ? card : null);
+}
+
+function extractUuid(value) {
+  if (!value) return "";
+  return value.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i)?.[0] || "";
+}
+
+function getCurrentDetailHref(document) {
+  const detailPane = getDetailPane(document) || document;
+  return firstExisting(detailPane, ["a[href*='/apply-with-ai/']", "a[href*='/jobs/']"])?.href || "";
+}
+
+function getCurrentDetailState(document) {
+  const detailPane = getDetailPane(document) || document;
+  const title = textOrEmpty(firstMatch(detailPane, TITLE_SELECTORS));
+  const href = getCurrentDetailHref(document);
+  return {
+    uuid: extractUuid(href),
+    title,
+    href
+  };
+}
+
+function getJobCards(document) {
+  const container = getResultsContainer(document);
+  if (!container) return [];
+
+  const cards = [];
+  const seen = new Set();
+  JOB_CARD_SELECTORS.forEach((selector) => {
+    try {
+      container.querySelectorAll(selector).forEach((card) => {
+        if (!card || seen.has(card) || !getClickTarget(card)) return;
+        seen.add(card);
+        cards.push(card);
+      });
+    } catch (error) {
+      // Ignore invalid selectors.
+    }
+  });
+  return cards;
+}
+
+function getCardKey(card) {
+  const href = getClickTarget(card)?.href || "";
+  return extractUuid(href) || href || card.getAttribute("aria-label") || "";
+}
+
+function getSiteLink(document, fallbackHref = "") {
+  return getCurrentDetailHref(document) || fallbackHref || window.location.href;
+}
+
+function openJobCard(card) {
+  const clickTarget = getClickTarget(card);
+  if (!clickTarget) {
+    throw new Error("Remote Hunter card click target not found.");
+  }
+
+  card.scrollIntoView({ block: "center", inline: "nearest" });
+
+  try {
+    card.click();
+  } catch (error) {
+    clickTarget.click();
+  }
+}
+
+async function waitForJobDetailsChange(previousState, document, options = {}) {
+  const timeoutMs = options.timeoutMs || 10000;
+  const pollMs = options.pollMs || 300;
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const detailPane = getDetailPane(document);
+    const titleEl = firstMatch(detailPane || document, TITLE_SELECTORS);
+    if (titleEl) {
+      const currentState = getCurrentDetailState(document);
+      if (
+        (currentState.uuid && currentState.uuid !== previousState?.uuid)
+        || (!currentState.uuid && currentState.title && currentState.title !== previousState?.title)
+      ) {
+        return {
+          changed: true,
+          state: currentState,
+          reason: currentState.uuid ? "uuid-changed" : "title-changed"
+        };
+      }
+    }
+
+    await wait(pollMs);
+  }
+
+  return {
+    changed: false,
+    state: getCurrentDetailState(document),
+    reason: "timeout"
+  };
+}
+
+function maybeExpandDescription(document) {
+  return false;
+}
+
+function getScrollContainer(document) {
+  return window;
+}
+
+function hasReachedEnd(document) {
+  const scrollBottom = window.scrollY + window.innerHeight;
+  const docHeight = Math.max(
+    document.body?.scrollHeight || 0,
+    document.documentElement?.scrollHeight || 0
+  );
+  return scrollBottom >= docHeight - 24;
+}
+
+function getBatchDebugInfo(document) {
+  const cards = getJobCards(document);
+  const clickTargetCount = cards.filter((card) => Boolean(getClickTarget(card))).length;
+  return {
+    resultsContainerFound: Boolean(getResultsContainer(document)),
+    cardCount: cards.length,
+    clickTargetCount,
+    sampleKeys: cards.slice(0, 5).map((card) => getCardKey(card))
+  };
+}
+
 function extract(document, url) {
-  const titleEl = firstMatch(document, ["TODO_SELECTOR"]);
-  const companyEl = firstMatch(document, ["TODO_SELECTOR"]);
-  const jdEl = firstMatch(document, ["TODO_SELECTOR"]);
+  const detailPane = getDetailPane(document) || document;
+  const titleEl = firstMatch(detailPane, TITLE_SELECTORS);
+  const companyEl = firstMatch(detailPane, COMPANY_SELECTORS);
+  const jdEl = firstMatch(detailPane, JD_SELECTORS);
+  const companyLinkEl = companyEl?.closest?.("a") || companyEl?.querySelector?.("a") || null;
+  const siteLink = getSiteLink(document);
 
   return {
     platform: "Remote Hunter",
-    siteLink: url,
-    company: companyEl ? companyEl.textContent.trim() : "",
-    jobTitle: titleEl ? titleEl.textContent.trim() : "",
-    companyLink: companyEl && companyEl.tagName === "A" ? companyEl.href : (companyEl?.querySelector("a")?.href || ""),
-    jd: jdEl ? jdEl.innerText.trim() : ""
+    siteLink,
+    company: textOrEmpty(companyEl),
+    jobTitle: textOrEmpty(titleEl),
+    companyLink: companyLinkEl?.href || "",
+    jd: jdEl ? jdEl.innerText.trim() : "",
+    _debug: {
+      detailPaneFound: Boolean(getDetailPane(document)),
+      resultsContainerFound: Boolean(getResultsContainer(document)),
+      titleFound: Boolean(titleEl),
+      companyFound: Boolean(companyEl),
+      jdFound: Boolean(jdEl),
+      titleLength: textOrEmpty(titleEl).length,
+      companyLength: textOrEmpty(companyEl).length,
+      jdLength: jdEl ? jdEl.innerText.trim().length : 0,
+      batch: getBatchDebugInfo(document)
+    }
   };
 }
 
 function getDebugInfo(document) {
   return {
     adapter: "remotehunter",
-    confidence: "Unverified.",
-    todo: true
+    confidence: "Medium - based on 2026 AI selector report.",
+    supportsBatch: true,
+    todo: false,
+    selectors: {
+      detailPaneFound: Boolean(getDetailPane(document)),
+      ...getBatchDebugInfo(document)
+    }
   };
 }
-return { canHandle, extract, getDebugInfo };
+return { waitForJobDetailsChange, canHandle, getDetailPane, getResultsContainer, getCurrentDetailState, getJobCards, getCardKey, openJobCard, maybeExpandDescription, getScrollContainer, hasReachedEnd, getBatchDebugInfo, extract, getDebugInfo };
 })();
 
 const jobcopilot = (() => {
@@ -1200,6 +1782,19 @@ const ADAPTERS = [
   generic
 ];
 
+const DEFAULT_BATCH_OPTIONS = {
+  minActionDelayMs: 1500,
+  maxActionDelayMs: 4500,
+  minScrollDelayMs: 1200,
+  maxScrollDelayMs: 3500,
+  maxJobsPerRun: 50,
+  maxIdleScrollRounds: 3,
+  detailTimeoutMs: 12000,
+  detailPollMs: 350,
+  discoveryRetryCount: 3,
+  discoveryRetryDelayMs: 900
+};
+
 function detectAdapter(url, document) {
   for (const adapter of ADAPTERS) {
     try {
@@ -1211,43 +1806,420 @@ function detectAdapter(url, document) {
   return generic;
 }
 
-function hasCriticalFields(raw) {
-  return Boolean(raw && (raw.jobTitle || raw.jd));
+function getAcceptanceInfo(raw) {
+  const titleLength = raw?.jobTitle?.trim?.().length || 0;
+  const jdLength = raw?.jd?.trim?.().length || 0;
+  const companyLength = raw?.company?.trim?.().length || 0;
+  const siteLinkLength = raw?.siteLink?.trim?.().length || 0;
+  const accepted = Boolean(titleLength || jdLength || companyLength);
+
+  return {
+    accepted,
+    reason: accepted ? "accepted" : "missing-title-company-jd",
+    lengths: {
+      titleLength,
+      jdLength,
+      companyLength,
+      siteLinkLength
+    }
+  };
 }
 
-function safeExtract(adapter, document, url) {
+function hasCriticalFields(raw) {
+  return getAcceptanceInfo(raw).accepted;
+}
+
+async function safeExtract(adapter, document, url) {
   try {
-    return adapter.extract(document, url);
+    return await adapter.extract(document, url);
   } catch (error) {
     return null;
   }
 }
 
-function runExtraction() {
-  const url = window.location.href;
-  const adapter = detectAdapter(url, document);
-  const raw = safeExtract(adapter, document, url);
-  const needsFallback = adapter !== generic && !hasCriticalFields(raw);
-  const fallbackRaw = needsFallback ? safeExtract(generic, document, url) : null;
-  const finalRaw = needsFallback && hasCriticalFields(fallbackRaw) ? fallbackRaw : raw;
-  const debug = adapter.getDebugInfo ? adapter.getDebugInfo(document) : {};
+function randomBetween(min, max) {
+  const lower = Math.max(0, Number.isFinite(min) ? min : 0);
+  const upper = Math.max(lower, Number.isFinite(max) ? max : lower);
+  return Math.floor(lower + Math.random() * (upper - lower + 1));
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitRandom(min, max) {
+  const value = randomBetween(min, max);
+  await wait(value);
+  return value;
+}
+
+function getBatchOptions(options = {}) {
+  return {
+    ...DEFAULT_BATCH_OPTIONS,
+    ...(options || {})
+  };
+}
+
+function getScrollPosition(scrollContainer) {
+  if (scrollContainer === window) {
+    return {
+      top: window.scrollY,
+      height: window.innerHeight,
+      scrollHeight: Math.max(
+        document.body?.scrollHeight || 0,
+        document.documentElement?.scrollHeight || 0
+      )
+    };
+  }
 
   return {
-    raw: finalRaw || {
-      platform: adapter === generic ? "Unknown" : debug.adapter || "Unknown",
-      siteLink: url,
-      company: "",
-      jobTitle: "",
-      companyLink: "",
-      jd: ""
-    },
+    top: scrollContainer.scrollTop,
+    height: scrollContainer.clientHeight,
+    scrollHeight: scrollContainer.scrollHeight
+  };
+}
+
+function scrollContainerByStep(scrollContainer) {
+  const position = getScrollPosition(scrollContainer);
+  const step = Math.max(320, Math.floor(position.height * 0.75));
+
+  if (scrollContainer === window) {
+    window.scrollTo({
+      top: position.top + step,
+      behavior: "smooth"
+    });
+  } else {
+    scrollContainer.scrollTo({
+      top: position.top + step,
+      behavior: "smooth"
+    });
+  }
+
+  return step;
+}
+
+function buildFallbackRaw(adapter, debug, url) {
+  return {
+    platform: adapter === generic ? "Unknown" : debug.adapter || "Unknown",
+    siteLink: url,
+    company: "",
+    jobTitle: "",
+    companyLink: "",
+    jd: ""
+  };
+}
+
+async function runSingleExtraction(url = window.location.href) {
+  const adapter = detectAdapter(url, document);
+  const debug = adapter.getDebugInfo ? adapter.getDebugInfo(document) : {};
+  const raw = await safeExtract(adapter, document, url);
+  const allowGenericFallback = debug.allowGenericFallback !== false;
+  const needsFallback = adapter !== generic && allowGenericFallback && !hasCriticalFields(raw);
+  const fallbackRaw = needsFallback ? await safeExtract(generic, document, url) : null;
+  const finalRaw = needsFallback && hasCriticalFields(fallbackRaw) ? fallbackRaw : raw;
+  const adapterDebug = finalRaw?._debug || raw?._debug || null;
+
+  return {
+    adapter,
+    raw: finalRaw || buildFallbackRaw(adapter, debug, url),
     debug: {
       ...debug,
+      adapterDebug,
       detectedAdapter: debug.adapter || "unknown",
+      allowGenericFallback,
       usedGenericFallback: Boolean(needsFallback && fallbackRaw && finalRaw === fallbackRaw),
       hasCriticalFields: hasCriticalFields(finalRaw)
     }
   };
+}
+
+function getCardState(adapter, document) {
+  const cards = typeof adapter.getJobCards === "function" ? adapter.getJobCards(document) || [] : [];
+  const keyed = [];
+  const seen = new Set();
+
+  cards.forEach((card) => {
+    let key = "";
+    try {
+      key = adapter.getCardKey ? adapter.getCardKey(card, document) : "";
+    } catch (error) {
+      key = "";
+    }
+
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    keyed.push({ key, card });
+  });
+
+  return keyed;
+}
+
+async function getCardStateWithRetries(adapter, document, batchOptions, summary) {
+  let cardState = [];
+
+  for (let attempt = 0; attempt < batchOptions.discoveryRetryCount; attempt += 1) {
+    cardState = getCardState(adapter, document);
+    if (cardState.length > 0) {
+      if (attempt > 0) {
+        summary.discoveryAttempts = attempt + 1;
+      }
+      return cardState;
+    }
+
+    if (attempt < batchOptions.discoveryRetryCount - 1) {
+      await wait(batchOptions.discoveryRetryDelayMs);
+    }
+  }
+
+  summary.discoveryAttempts = batchOptions.discoveryRetryCount;
+  return cardState;
+}
+
+function getScrollContainer(adapter, document) {
+  return typeof adapter.getScrollContainer === "function"
+    ? (adapter.getScrollContainer(document) || window)
+    : window;
+}
+
+function getScrollContainerType(scrollContainer) {
+  return scrollContainer === window ? "window" : "element";
+}
+
+function getAdapterBatchDebug(adapter, document) {
+  try {
+    return typeof adapter.getBatchDebugInfo === "function" ? (adapter.getBatchDebugInfo(document) || {}) : {};
+  } catch (error) {
+    return { debugError: error?.message || "batch-debug-failed" };
+  }
+}
+
+async function runBatchExtraction(options = {}) {
+  const { adapter, debug } = await runSingleExtraction(window.location.href);
+  const batchOptions = getBatchOptions(options);
+  const initialScrollContainer = getScrollContainer(adapter, document);
+
+  if (!debug.supportsBatch || typeof adapter.getJobCards !== "function" || typeof adapter.openJobCard !== "function") {
+    return {
+      raw: buildFallbackRaw(adapter, debug, window.location.href),
+      rows: [],
+      summary: {
+        supported: false,
+        reason: "Batch crawling is not implemented for this platform yet.",
+        adapter: debug.adapter || "unknown"
+      },
+      debug
+    };
+  }
+
+  const initialBatchDebug = getAdapterBatchDebug(adapter, document);
+  const summary = {
+    supported: true,
+    adapter: debug.adapter || "unknown",
+    discovered: 0,
+    processed: 0,
+    skipped: 0,
+    failed: 0,
+    idleScrollRounds: 0,
+    stopReason: "completed",
+    resultsContainerFound: Boolean(initialBatchDebug.resultsContainerFound),
+    initialCardCount: initialBatchDebug.cardCount || 0,
+    finalCardCount: initialBatchDebug.cardCount || 0,
+    scrollContainerType: getScrollContainerType(initialScrollContainer),
+    acceptedRows: 0,
+    reasonsRejected: [],
+    discoveryAttempts: 1,
+    initialBatchDebug
+  };
+
+  const rows = [];
+  const discoveredKeys = new Set();
+  const processedKeys = new Set();
+  const failedCards = [];
+  let idleRounds = 0;
+
+  while (processedKeys.size < batchOptions.maxJobsPerRun && idleRounds < batchOptions.maxIdleScrollRounds) {
+    const cardState = await getCardStateWithRetries(adapter, document, batchOptions, summary);
+    let newCardsThisRound = 0;
+
+    cardState.forEach(({ key }) => {
+      if (!discoveredKeys.has(key)) {
+        discoveredKeys.add(key);
+        newCardsThisRound += 1;
+      }
+    });
+
+    summary.discovered = discoveredKeys.size;
+    summary.finalCardCount = cardState.length;
+
+    console.debug("[job-scraper] batch discovery", {
+      adapter: summary.adapter,
+      resultsContainerFound: summary.resultsContainerFound,
+      initialCardCount: summary.initialCardCount,
+      currentCardCount: cardState.length,
+      scrollContainerType: summary.scrollContainerType,
+      discoveryAttempts: summary.discoveryAttempts
+    });
+
+    for (const { key, card } of cardState) {
+      if (processedKeys.size >= batchOptions.maxJobsPerRun) {
+        summary.stopReason = "max-jobs-reached";
+        break;
+      }
+
+      if (processedKeys.has(key)) continue;
+      processedKeys.add(key);
+
+      const cardDiagnostics = {
+        key,
+        hasClickTarget: true
+      };
+
+      try {
+        await waitRandom(batchOptions.minActionDelayMs, batchOptions.maxActionDelayMs);
+
+        const previousState = typeof adapter.waitForJobDetailsChange === "function"
+          ? (adapter.getCurrentDetailState ? adapter.getCurrentDetailState(document) : null)
+          : null;
+
+        cardDiagnostics.previousState = previousState;
+        adapter.openJobCard(card, document);
+
+        let detailState = { changed: true, reason: "no-detail-wait-hook" };
+        if (typeof adapter.waitForJobDetailsChange === "function") {
+          detailState = await adapter.waitForJobDetailsChange(previousState, document, {
+            timeoutMs: batchOptions.detailTimeoutMs,
+            pollMs: batchOptions.detailPollMs
+          });
+        }
+
+        cardDiagnostics.detailState = detailState;
+
+        await waitRandom(batchOptions.minActionDelayMs, batchOptions.maxActionDelayMs);
+
+        if (typeof adapter.maybeExpandDescription === "function") {
+          adapter.maybeExpandDescription(document);
+        }
+
+        const singleResult = await runSingleExtraction(window.location.href);
+        const acceptance = getAcceptanceInfo(singleResult.raw);
+        cardDiagnostics.extracted = {
+          siteLink: singleResult.raw?.siteLink || "",
+          lengths: acceptance.lengths,
+          adapterDebug: singleResult.debug?.adapterDebug || null
+        };
+
+        if (acceptance.accepted) {
+          rows.push(singleResult.raw);
+          summary.acceptedRows = rows.length;
+        } else {
+          summary.skipped += 1;
+          summary.reasonsRejected.push({
+            key,
+            reason: acceptance.reason,
+            lengths: acceptance.lengths
+          });
+        }
+
+        summary.processed += 1;
+
+        if (detailState && detailState.changed === false) {
+          failedCards.push({
+            key,
+            reason: detailState.reason || "detail-did-not-change",
+            diagnostics: cardDiagnostics
+          });
+        }
+
+        console.debug("[job-scraper] card result", {
+          adapter: summary.adapter,
+          key,
+          accepted: acceptance.accepted,
+          lengths: acceptance.lengths,
+          detailChanged: detailState?.changed,
+          detailReason: detailState?.reason
+        });
+      } catch (error) {
+        summary.failed += 1;
+        failedCards.push({
+          key,
+          reason: error?.message || "card-processing-failed",
+          diagnostics: cardDiagnostics
+        });
+      }
+    }
+
+    if (processedKeys.size >= batchOptions.maxJobsPerRun) {
+      summary.stopReason = "max-jobs-reached";
+      break;
+    }
+
+    const scrollContainer = getScrollContainer(adapter, document);
+    const beforeScroll = getScrollPosition(scrollContainer);
+
+    if (typeof adapter.loadMoreIfNeeded === "function") {
+      try {
+        adapter.loadMoreIfNeeded(document);
+      } catch (error) {
+        // Ignore load-more failures and keep crawling.
+      }
+    }
+
+    scrollContainerByStep(scrollContainer);
+    await waitRandom(batchOptions.minScrollDelayMs, batchOptions.maxScrollDelayMs);
+
+    const afterScrollState = getCardState(adapter, document);
+    const discoveredAfterScroll = afterScrollState.filter(({ key }) => !discoveredKeys.has(key));
+    const afterScroll = getScrollPosition(scrollContainer);
+    const scrollGrowthDetected = afterScroll.scrollHeight > beforeScroll.scrollHeight || afterScroll.top > beforeScroll.top + 8;
+
+    summary.finalCardCount = afterScrollState.length;
+    summary.scrollGrowthDetected = scrollGrowthDetected;
+
+    console.debug("[job-scraper] scroll step", {
+      adapter: summary.adapter,
+      beforeScroll,
+      afterScroll,
+      discoveredAfterScroll: discoveredAfterScroll.length,
+      scrollGrowthDetected
+    });
+
+    if (discoveredAfterScroll.length === 0) {
+      idleRounds += 1;
+      summary.idleScrollRounds = idleRounds;
+
+      if (
+        ((typeof adapter.hasReachedEnd === "function") && adapter.hasReachedEnd(document))
+        || !scrollGrowthDetected
+      ) {
+        summary.stopReason = "reached-end";
+        break;
+      }
+    } else {
+      idleRounds = 0;
+      summary.idleScrollRounds = 0;
+    }
+  }
+
+  if (idleRounds >= batchOptions.maxIdleScrollRounds) {
+    summary.stopReason = "max-idle-scroll-rounds";
+  }
+
+  summary.finalBatchDebug = getAdapterBatchDebug(adapter, document);
+
+  return {
+    raw: rows[rows.length - 1] || buildFallbackRaw(adapter, debug, window.location.href),
+    rows,
+    summary: {
+      ...summary,
+      failedCards
+    },
+    debug
+  };
+}
+
+async function runExtraction(options = {}) {
+  const mode = options?.mode === "batch" ? "batch" : "single";
+  return mode === "batch" ? runBatchExtraction(options) : runSingleExtraction(window.location.href);
 }
 
 window.__JOB_SCRAPER_RUN__ = runExtraction;
